@@ -38,6 +38,7 @@ describe('run', () => {
             number: 1345,
             user: { login: 'sorenlouv' },
             requested_reviewers: [{ login: 'sorenlouv' }],
+            base: { ref: 'main' },
           },
         },
         serverUrl: 'https://github.my-own-enterprise.com',
@@ -48,6 +49,7 @@ describe('run', () => {
 
     expect(spy).toHaveBeenCalledWith({
       exitCodeOnFailure: false,
+      processArgs: ['--sourceBranch', 'main'],
       options: {
         accessToken: 'very-secret',
         assignees: ['sorenlouv'],
@@ -66,6 +68,56 @@ describe('run', () => {
         githubApiBaseUrlV4: 'https://github.my-own-enterprise.com/api/graphql',
         reviewers: ['sorenlouv'],
       },
+    });
+  });
+
+  it('passes PR base branch as sourceBranch via processArgs for non-default branches', async () => {
+    const spy = jest
+      .spyOn(backport, 'backportRun')
+      // @ts-expect-error
+      .mockResolvedValue('backport return value');
+
+    // @ts-expect-error
+    jest.spyOn(backport, 'getOptionsFromGithub').mockResolvedValue({});
+    jest
+      .spyOn(backport, 'getCommits')
+      //@ts-expect-error
+      .mockResolvedValue([{ suggestedTargetBranches: ['7.x'] }]);
+
+    // disable logs
+    jest.spyOn(core, 'info').mockReturnValue();
+
+    await run({
+      inputs: {
+        accessToken: 'very-secret',
+        autoBackportLabelPrefix: 'backport-to-',
+        repoForkOwner: '',
+        addOriginalReviewers: false,
+      },
+      context: {
+        repo: { owner: 'rapyuta-robotics', repo: 'rr_oks' },
+        payload: {
+          pull_request: {
+            number: 11525,
+            user: { login: 'yuokamoto' },
+            requested_reviewers: [],
+            base: { ref: 'release/2.10' },
+          },
+        },
+        serverUrl: 'https://github.com',
+        apiUrl: 'https://api.github.com',
+        graphqlUrl: 'https://api.github.com/graphql',
+      } as unknown as Context,
+    });
+
+    expect(spy).toHaveBeenCalledWith({
+      exitCodeOnFailure: false,
+      processArgs: ['--sourceBranch', 'release/2.10'],
+      options: expect.objectContaining({
+        pullNumber: 11525,
+        repoName: 'rr_oks',
+        repoOwner: 'rapyuta-robotics',
+      }),
     });
   });
 
@@ -92,6 +144,7 @@ describe('run', () => {
             number: 1345,
             user: { login: 'sorenlouv' },
             requested_reviewers: [{ login: 'sorenlouv' }],
+            base: { ref: 'main' },
           },
         },
         serverUrl: 'https://github.my-own-enterprise.com',
