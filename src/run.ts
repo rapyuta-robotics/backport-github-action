@@ -43,7 +43,30 @@ export async function run({
     );
   }
 
-  const result = await backportRun({ options, exitCodeOnFailure: false });
+  // The backport library's getOptionsFromGithub fetches .backportrc.json from
+  // the repo's default branch, which means sourceBranch is always read from
+  // there. When a PR targets a non-default branch (e.g. release/2.10), the
+  // sourceBranch from the default branch config won't match, causing the
+  // backport to abort with "no branches to backport to".
+  //
+  // To fix this, we extract the PR's base branch and pass it via processArgs
+  // (which has the highest precedence in option merging) so it overrides
+  // the sourceBranch from the remote config.
+  const pullRequest = context.payload.pull_request;
+  const prBaseBranch = pullRequest?.base?.ref as string | undefined;
+  const processArgs: string[] = [];
+  if (prBaseBranch) {
+    core.info(
+      `PR base branch: "${prBaseBranch}" — overriding sourceBranch to match`,
+    );
+    processArgs.push('--sourceBranch', prBaseBranch);
+  }
+
+  const result = await backportRun({
+    options,
+    processArgs,
+    exitCodeOnFailure: false,
+  });
 
   core.info(`Result ${JSON.stringify(result, null, 2)}`);
   return result;
