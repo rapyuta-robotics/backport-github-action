@@ -22,12 +22,16 @@ inputs:
     description: Merge method for auto-merge (merge, squash or rebase)
     required: false
     default: squash
-  line_reviewers:
-    description: 'JSON object mapping a target branch to the GitHub login(s) to request review from on its backport PRs, e.g. {"release/2.3": "alice", "release/2.6": ["bob"]}. null or missing means no request'
+  fix_owner:
+    description: GitHub login that owns the fix (e.g. the ADO assignee of its work item). Review is requested from them on clean backport PRs, and conflicts are assigned to them. Empty means the original PR author, or its merger if the author is a bot. Bots are never used
+    required: false
+    default: ''
+  escalation:
+    description: GitHub login that takes over a conflict after the backport SLA. Only named in the conflict comment (not pinged, not assigned)
     required: false
     default: ''
   conflict_mode:
-    description: 'What to do when a pick conflicts. "comment" (default) opens no PR; it comments the exact commands on the original PR, assigns whoever merged it and adds the label <conflict_label_prefix><target branch>. "draft-pr" keeps the old behaviour of the repo config (commitConflicts) and posts the library failure comment'
+    description: 'What to do when a pick conflicts. "comment" (default) opens no PR; it comments the exact commands on the original PR, assigns the fix owner and adds the label <conflict_label_prefix><target branch>. "draft-pr" keeps the old behaviour of the repo config (commitConflicts) and posts the library failure comment'
     required: false
     default: comment
   conflict_label_prefix:

@@ -23,7 +23,8 @@ run({
     }),
     autoMerge: core.getBooleanInput('auto_merge', { required: false }),
     autoMergeMethod: core.getInput('auto_merge_method', { required: false }),
-    lineReviewers: core.getInput('line_reviewers', { required: false }),
+    fixOwner: core.getInput('fix_owner', { required: false }),
+    escalation: core.getInput('escalation', { required: false }),
     conflictMode: core.getInput('conflict_mode', {
       required: false,
     }) as ConflictMode,

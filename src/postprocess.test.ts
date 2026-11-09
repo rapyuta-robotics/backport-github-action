@@ -2,8 +2,8 @@ import * as core from '@actions/core';
 import {
   conflictComment,
   conflictMarker,
-  parseLineReviewers,
   postProcess,
+  resolveOwner,
   PostProcessSettings,
   shellQuote,
   withProvenance,
@@ -17,7 +17,8 @@ function settings(
   return {
     autoMerge: true,
     autoMergeMethod: 'squash',
-    lineReviewers: {},
+    fixOwner: '',
+    escalation: '',
     conflictMode: 'comment',
     conflictLabelPrefix: 'backport-conflict-',
     provenanceTrailer: true,
@@ -146,25 +147,19 @@ describe('shellQuote', () => {
   });
 });
 
-describe('parseLineReviewers', () => {
-  it('accepts strings, lists and null owners', () => {
-    expect(
-      parseLineReviewers(
-        '{"release/2.3": "alice", "release/2.6": ["bob", "carol"], "release/2.14": null}',
-      ),
-    ).toEqual({
-      'release/2.3': ['alice'],
-      'release/2.6': ['bob', 'carol'],
-    });
+describe('resolveOwner', () => {
+  it('prefers the fix owner', () => {
+    expect(resolveOwner('owner1', 'author1', 'merger1')).toBe('owner1');
   });
 
-  it('treats empty input as no reviewers', () => {
-    expect(parseLineReviewers('')).toEqual({});
+  it('falls back to the PR author, then the merger', () => {
+    expect(resolveOwner('', 'author1', 'merger1')).toBe('author1');
+    expect(resolveOwner('', 'dependabot[bot]', 'merger1')).toBe('merger1');
+    expect(resolveOwner('', undefined, 'merger1')).toBe('merger1');
   });
 
-  it('warns and returns no reviewers on invalid JSON', () => {
-    expect(parseLineReviewers('{not json')).toEqual({});
-    expect(core.warning).toHaveBeenCalled();
+  it('never returns a bot', () => {
+    expect(resolveOwner('x[bot]', 'y[bot]', 'z[bot]')).toBeUndefined();
   });
 });
 
@@ -222,14 +217,14 @@ describe('postProcess: clean backport', () => {
     expect(update?.[1].body).toContain(`(cherry picked from commit ${SHA})`);
   });
 
-  it('requests review from the line owner', async () => {
+  it('requests review from the fix owner', async () => {
     const { octokit, calls } = fakeOctokit();
     await postProcess({
       octokit: octokit as any,
       repo,
-      sourcePr,
+      sourcePr: { ...sourcePr, author: 'author1' },
       response: successResponse('release/2.14') as any,
-      settings: settings({ lineReviewers: { 'release/2.14': ['owner1'] } }),
+      settings: settings({ fixOwner: 'owner1' }),
     });
     const req = calls.find((c) => c[0] === 'pulls.requestReviewers');
     expect(req?.[1]).toMatchObject({
@@ -238,14 +233,28 @@ describe('postProcess: clean backport', () => {
     });
   });
 
-  it('requests no review when the line has no owner', async () => {
+  it('without a fix owner, requests review from the original author', async () => {
     const { octokit, calls } = fakeOctokit();
     await postProcess({
       octokit: octokit as any,
       repo,
-      sourcePr,
+      sourcePr: { ...sourcePr, author: 'author1', mergedBy: 'merger1' },
       response: successResponse('release/2.14') as any,
-      settings: settings({ lineReviewers: { 'release/2.3': ['x'] } }),
+      settings: settings(),
+    });
+    expect(
+      calls.find((c) => c[0] === 'pulls.requestReviewers')?.[1].reviewers,
+    ).toEqual(['author1']);
+  });
+
+  it('requests no review when nobody human owns the fix', async () => {
+    const { octokit, calls } = fakeOctokit();
+    await postProcess({
+      octokit: octokit as any,
+      repo,
+      sourcePr: { ...sourcePr, author: 'a[bot]', mergedBy: 'b[bot]' },
+      response: successResponse('release/2.14') as any,
+      settings: settings(),
     });
     expect(calls.some((c) => c[0] === 'pulls.requestReviewers')).toBe(false);
   });
@@ -341,6 +350,24 @@ describe('postProcess: conflict', () => {
     });
   });
 
+  it('assigns and mentions the fix owner, and names the escalation without pinging it', async () => {
+    const { octokit, calls } = fakeOctokit();
+    await postProcess({
+      octokit: octokit as any,
+      repo,
+      sourcePr: { ...sourcePr, author: 'author1', mergedBy: 'merger1' },
+      response: conflictResponse('release/2.3') as any,
+      settings: settings({ fixOwner: 'owner1', escalation: 'rte1' }),
+    });
+    expect(
+      calls.find((c) => c[0] === 'issues.addAssignees')?.[1].assignees,
+    ).toEqual(['owner1']);
+    const body = calls.find((c) => c[0] === 'issues.createComment')?.[1].body;
+    expect(body).toContain('@owner1');
+    expect(body).toContain('`rte1`');
+    expect(body).not.toContain('@rte1');
+  });
+
   it('uses merged_by from the event payload without fetching the PR', async () => {
     const { octokit, calls } = fakeOctokit({ mergedBy: 'someone-else' });
     await postProcess({
@@ -413,6 +440,20 @@ describe('postProcess: who owns a conflict', () => {
         mergedBy: 'github-merge-queue[bot]',
         author: 'author1',
       },
+      response: conflictResponse() as any,
+      settings: settings(),
+    });
+    expect(
+      calls.find((c) => c[0] === 'issues.addAssignees')?.[1].assignees,
+    ).toEqual(['author1']);
+  });
+
+  it('prefers the PR author over a human merger when there is no fix owner', async () => {
+    const { octokit, calls } = fakeOctokit();
+    await postProcess({
+      octokit: octokit as any,
+      repo,
+      sourcePr: { ...sourcePr, mergedBy: 'merger1', author: 'author1' },
       response: conflictResponse() as any,
       settings: settings(),
     });

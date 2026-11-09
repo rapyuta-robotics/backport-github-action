@@ -7,12 +7,7 @@ import {
   UnhandledErrorResult,
   getOptionsFromGithub,
 } from 'backport';
-import {
-  ConflictMode,
-  OctokitLike,
-  parseLineReviewers,
-  postProcess,
-} from './postprocess';
+import { ConflictMode, OctokitLike, postProcess } from './postprocess';
 
 export type Inputs = {
   accessToken: string;
@@ -21,7 +16,8 @@ export type Inputs = {
   addOriginalReviewers: boolean;
   autoMerge: boolean;
   autoMergeMethod: string;
-  lineReviewers: string;
+  fixOwner: string;
+  escalation: string;
   conflictMode: ConflictMode;
   conflictLabelPrefix: string;
   provenanceTrailer: boolean;
@@ -98,7 +94,8 @@ export async function run({
     settings: {
       autoMerge: inputs.autoMerge,
       autoMergeMethod: inputs.autoMergeMethod || 'squash',
-      lineReviewers: parseLineReviewers(inputs.lineReviewers),
+      fixOwner: inputs.fixOwner,
+      escalation: inputs.escalation,
       conflictMode: inputs.conflictMode,
       conflictLabelPrefix: inputs.conflictLabelPrefix,
       provenanceTrailer: inputs.provenanceTrailer,

@@ -8,7 +8,8 @@ export type Inputs = {
     addOriginalReviewers: boolean;
     autoMerge: boolean;
     autoMergeMethod: string;
-    lineReviewers: string;
+    fixOwner: string;
+    escalation: string;
     conflictMode: ConflictMode;
     conflictLabelPrefix: string;
     provenanceTrailer: boolean;

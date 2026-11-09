@@ -3,17 +3,24 @@ import type { BackportResponse } from 'backport';
 
 // Work done after the backport library has run:
 //   - clean backport PR: add a provenance trailer to the body, request review
-//     from the line owner, enable auto-merge;
+//     from the fix owner, enable auto-merge;
 //   - conflict: no PR is opened. Comment on the original PR with the exact
-//     commands, assign whoever merged it and label it per target branch.
+//     commands, assign the fix owner and label it per target branch.
+//
+// Backports are owned per fix, not per line. The fix owner comes from the
+// caller (`fix_owner`, e.g. the ADO assignee of the fix's work item); without
+// it, the original PR's author, or its merger if the author is a bot.
 
 export type ConflictMode = 'comment' | 'draft-pr';
 
 export type PostProcessSettings = {
   autoMerge: boolean;
   autoMergeMethod: string;
-  // target branch -> GitHub logins to request review from
-  lineReviewers: Partial<Record<string, string[]>>;
+  // GitHub login that owns the fix; '' to derive it from author / merger
+  fixOwner: string;
+  // GitHub login that takes over after the SLA; named in the conflict
+  // comment but not pinged
+  escalation: string;
   conflictMode: ConflictMode;
   conflictLabelPrefix: string;
   provenanceTrailer: boolean;
@@ -28,17 +35,17 @@ export type SourcePr = {
 
 const isBot = (login: string | undefined) => !!login && login.endsWith('[bot]');
 
-// Whoever merged the PR owns its conflicts. A bot (e.g. a merge queue) cannot
-// fix a conflict, so fall back to the author; if that is a bot too, nobody is
-// assigned and the SLA digest reports the conflict as unowned.
-function conflictOwner(mergedBy?: string, author?: string): string | undefined {
-  if (mergedBy && !isBot(mergedBy)) {
-    return mergedBy;
-  }
-  if (author && !isBot(author)) {
-    return author;
-  }
-  return undefined;
+// The fix owner, else the original author, else whoever merged it; never a
+// bot (a bot cannot fix a conflict or approve a port). undefined means nobody:
+// the SLA digest then reports the conflict as unowned.
+export function resolveOwner(
+  fixOwner?: string,
+  author?: string,
+  mergedBy?: string,
+): string | undefined {
+  return [fixOwner?.trim(), author, mergedBy].find(
+    (login): login is string => !!login && !isBot(login),
+  );
 }
 
 // Only the parts of an Octokit instance used here, so tests can fake it.
@@ -93,39 +100,6 @@ export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-export function parseLineReviewers(raw: string): Record<string, string[]> {
-  if (!raw.trim()) {
-    return {};
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    core.warning(
-      `line_reviewers is not valid JSON, requesting no reviewers: ${
-        (e as Error).message
-      }`,
-    );
-    return {};
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    core.warning(
-      'line_reviewers must be a JSON object, requesting no reviewers',
-    );
-    return {};
-  }
-  const out: Record<string, string[]> = {};
-  for (const [branch, value] of Object.entries(parsed)) {
-    const logins = (Array.isArray(value) ? value : [value]).filter(
-      (v): v is string => typeof v === 'string' && v.trim() !== '',
-    );
-    if (logins.length > 0) {
-      out[branch] = logins;
-    }
-  }
-  return out;
-}
-
 export function conflictMarker(targetBranch: string): string {
   return `<!-- backport-conflict:${targetBranch} -->`;
 }
@@ -137,6 +111,7 @@ export function conflictComment({
   conflictingFiles,
   missingBackports,
   assignee,
+  escalation,
 }: {
   targetBranch: string;
   sourcePr: SourcePr;
@@ -144,6 +119,7 @@ export function conflictComment({
   conflictingFiles: string[];
   missingBackports: string[];
   assignee?: string;
+  escalation?: string;
 }): string {
   const branch = `backport/${targetBranch}/pr-${sourcePr.number}`;
   const title = `[Backport to ${targetBranch}] ${sourcePr.title} (#${sourcePr.number})`;
@@ -159,8 +135,8 @@ export function conflictComment({
     '',
     `The squash commit of this PR does not apply cleanly to \`${targetBranch}\`, so no backport PR was opened.` +
       (assignee
-        ? ` @${assignee}, you merged this PR, so this is assigned to you.`
-        : ''),
+        ? ` @${assignee}, you own this fix, so this port is assigned to you.`
+        : ' Nobody could be identified as the owner of this fix; please pick it up.'),
     '',
   ];
   if (conflictingFiles.length > 0) {
@@ -196,6 +172,12 @@ export function conflictComment({
     '',
     `If \`${targetBranch}\` does not need this fix, add the label \`no-backport-${targetBranch}\` with a comment saying why.`,
   );
+  if (escalation) {
+    lines.push(
+      '',
+      `If it is still open after the backport SLA, \`${escalation}\` takes it over.`,
+    );
+  }
   return lines.join('\n');
 }
 
@@ -260,7 +242,10 @@ async function handleClean(
     }
   }
 
-  const reviewers = settings.lineReviewers[targetBranch] ?? [];
+  // The bot opened the PR, so the fix owner is not its author and their
+  // approval counts towards branch protection.
+  const owner = await fixOwnerFor(octokit, repo, sourcePr, settings);
+  const reviewers = owner ? [owner] : [];
   if (reviewers.length > 0) {
     try {
       await octokit.rest.pulls.requestReviewers({
@@ -277,7 +262,7 @@ async function handleClean(
     }
   } else {
     core.info(
-      `No line owner configured for ${targetBranch}; no review requested`,
+      `No human owner found for #${sourcePr.number}; no review requested on #${pullNumber}`,
     );
   }
 
@@ -304,6 +289,33 @@ async function handleClean(
   }
 }
 
+async function fixOwnerFor(
+  octokit: OctokitLike,
+  repo: Repo,
+  sourcePr: SourcePr,
+  settings: PostProcessSettings,
+): Promise<string | undefined> {
+  let { mergedBy, author } = sourcePr;
+  if (!resolveOwner(settings.fixOwner) && (!mergedBy || !author)) {
+    // A failed lookup must not stop the comment or the label.
+    try {
+      const { data } = await octokit.rest.pulls.get({
+        ...repo,
+        pull_number: sourcePr.number,
+      });
+      mergedBy = mergedBy ?? (data.merged_by?.login as string | undefined);
+      author = author ?? (data.user?.login as string | undefined);
+    } catch (e) {
+      core.warning(
+        `Could not look up author/merger of #${sourcePr.number}: ${
+          (e as Error).message
+        }`,
+      );
+    }
+  }
+  return resolveOwner(settings.fixOwner, author, mergedBy);
+}
+
 async function handleConflict(
   octokit: OctokitLike,
   repo: Repo,
@@ -316,17 +328,7 @@ async function handleConflict(
   },
   settings: PostProcessSettings,
 ) {
-  let mergedBy = sourcePr.mergedBy;
-  let author = sourcePr.author;
-  if (!mergedBy) {
-    const { data } = await octokit.rest.pulls.get({
-      ...repo,
-      pull_number: sourcePr.number,
-    });
-    mergedBy = data.merged_by?.login as string | undefined;
-    author = author ?? (data.user?.login as string | undefined);
-  }
-  const owner = conflictOwner(mergedBy, author);
+  const owner = await fixOwnerFor(octokit, repo, sourcePr, settings);
 
   const body = conflictComment({
     targetBranch,
@@ -337,6 +339,7 @@ async function handleConflict(
       (c) => c.formatted,
     ),
     assignee: owner,
+    escalation: settings.escalation.trim() || undefined,
   });
   await upsertConflictComment(
     octokit,

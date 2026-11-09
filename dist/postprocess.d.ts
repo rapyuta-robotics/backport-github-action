@@ -3,7 +3,8 @@ export type ConflictMode = 'comment' | 'draft-pr';
 export type PostProcessSettings = {
     autoMerge: boolean;
     autoMergeMethod: string;
-    lineReviewers: Partial<Record<string, string[]>>;
+    fixOwner: string;
+    escalation: string;
     conflictMode: ConflictMode;
     conflictLabelPrefix: string;
     provenanceTrailer: boolean;
@@ -14,6 +15,7 @@ export type SourcePr = {
     mergedBy?: string;
     author?: string;
 };
+export declare function resolveOwner(fixOwner?: string, author?: string, mergedBy?: string): string | undefined;
 export type OctokitLike = {
     rest: {
         pulls: {
@@ -45,15 +47,15 @@ type Repo = {
 export declare function provenanceLines(prNumber: number, shas: string[]): string[];
 export declare function withProvenance(body: string | null | undefined, prNumber: number, shas: string[]): string;
 export declare function shellQuote(s: string): string;
-export declare function parseLineReviewers(raw: string): Record<string, string[]>;
 export declare function conflictMarker(targetBranch: string): string;
-export declare function conflictComment({ targetBranch, sourcePr, shas, conflictingFiles, missingBackports, assignee, }: {
+export declare function conflictComment({ targetBranch, sourcePr, shas, conflictingFiles, missingBackports, assignee, escalation, }: {
     targetBranch: string;
     sourcePr: SourcePr;
     shas: string[];
     conflictingFiles: string[];
     missingBackports: string[];
     assignee?: string;
+    escalation?: string;
 }): string;
 export declare function postProcess({ octokit, repo, sourcePr, response, settings, }: {
     octokit: OctokitLike;
