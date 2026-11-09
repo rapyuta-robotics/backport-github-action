@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import { context } from '@actions/github';
+import { ConflictMode } from './postprocess';
 import { getFailureMessage, run } from './run';
 
 // set environment for APM
@@ -18,6 +19,19 @@ run({
       required: false,
     }),
     addOriginalReviewers: core.getBooleanInput('add_original_reviewers', {
+      required: false,
+    }),
+    autoMerge: core.getBooleanInput('auto_merge', { required: false }),
+    autoMergeMethod: core.getInput('auto_merge_method', { required: false }),
+    fixOwner: core.getInput('fix_owner', { required: false }),
+    escalation: core.getInput('escalation', { required: false }),
+    conflictMode: core.getInput('conflict_mode', {
+      required: false,
+    }) as ConflictMode,
+    conflictLabelPrefix: core.getInput('conflict_label_prefix', {
+      required: false,
+    }),
+    provenanceTrailer: core.getBooleanInput('provenance_trailer', {
       required: false,
     }),
   },
