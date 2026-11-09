@@ -159,6 +159,11 @@ describe('resolveOwner', () => {
     expect(resolveOwner('', undefined, 'merger1')).toBe('merger1');
   });
 
+  it('treats the CI user and known bot accounts as bots', () => {
+    expect(resolveOwner('', 'rr-github-ci-user', 'merger1')).toBe('merger1');
+    expect(resolveOwner('', 'dependabot', 'github-actions')).toBeUndefined();
+  });
+
   it('never returns a bot', () => {
     expect(resolveOwner('x[bot]', 'y[bot]', 'z[bot]')).toBeUndefined();
   });

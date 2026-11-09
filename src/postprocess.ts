@@ -33,7 +33,16 @@ export type SourcePr = {
   author?: string;
 };
 
-const isBot = (login: string | undefined) => !!login && login.endsWith('[bot]');
+// Same list as rr_oks_deps oks_graph/fix_owner.py _KNOWN_BOTS.
+const KNOWN_BOTS = new Set([
+  'rr-github-ci-user',
+  'github-actions',
+  'dependabot',
+  'renovate',
+  'copilot',
+]);
+const isBot = (login: string | undefined) =>
+  !!login && (login.endsWith('[bot]') || KNOWN_BOTS.has(login.toLowerCase()));
 
 // The fix owner, else the original author, else whoever merged it; never a
 // bot (a bot cannot fix a conflict or approve a port). undefined means nobody:

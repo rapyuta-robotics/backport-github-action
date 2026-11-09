@@ -199658,7 +199658,15 @@ var __importStar = (this && this.__importStar) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.postProcess = exports.conflictComment = exports.conflictMarker = exports.escalationFor = exports.shellQuote = exports.withProvenance = exports.provenanceLines = exports.resolveOwner = void 0;
 const core = __importStar(__nccwpck_require__(42186));
-const isBot = (login) => !!login && login.endsWith('[bot]');
+// Same list as rr_oks_deps oks_graph/fix_owner.py _KNOWN_BOTS.
+const KNOWN_BOTS = new Set([
+    'rr-github-ci-user',
+    'github-actions',
+    'dependabot',
+    'renovate',
+    'copilot',
+]);
+const isBot = (login) => !!login && (login.endsWith('[bot]') || KNOWN_BOTS.has(login.toLowerCase()));
 // The fix owner, else the original author, else whoever merged it; never a
 // bot (a bot cannot fix a conflict or approve a port). undefined means nobody:
 // the SLA digest then reports the conflict as unowned.
