@@ -23,7 +23,23 @@ export type SourcePr = {
   number: number;
   title: string;
   mergedBy?: string;
+  author?: string;
 };
+
+const isBot = (login: string | undefined) => !!login && login.endsWith('[bot]');
+
+// Whoever merged the PR owns its conflicts. A bot (e.g. a merge queue) cannot
+// fix a conflict, so fall back to the author; if that is a bot too, nobody is
+// assigned and the SLA digest reports the conflict as unowned.
+function conflictOwner(mergedBy?: string, author?: string): string | undefined {
+  if (mergedBy && !isBot(mergedBy)) {
+    return mergedBy;
+  }
+  if (author && !isBot(author)) {
+    return author;
+  }
+  return undefined;
+}
 
 // Only the parts of an Octokit instance used here, so tests can fake it.
 export type OctokitLike = {
@@ -301,13 +317,16 @@ async function handleConflict(
   settings: PostProcessSettings,
 ) {
   let mergedBy = sourcePr.mergedBy;
+  let author = sourcePr.author;
   if (!mergedBy) {
     const { data } = await octokit.rest.pulls.get({
       ...repo,
       pull_number: sourcePr.number,
     });
     mergedBy = data.merged_by?.login as string | undefined;
+    author = author ?? (data.user?.login as string | undefined);
   }
+  const owner = conflictOwner(mergedBy, author);
 
   const body = conflictComment({
     targetBranch,
@@ -317,7 +336,7 @@ async function handleConflict(
     missingBackports: (errorContext.commitsWithoutBackports ?? []).map(
       (c) => c.formatted,
     ),
-    assignee: mergedBy,
+    assignee: owner,
   });
   await upsertConflictComment(
     octokit,
@@ -327,15 +346,15 @@ async function handleConflict(
     body,
   );
 
-  if (mergedBy) {
+  if (owner) {
     try {
       await octokit.rest.issues.addAssignees({
         ...repo,
         issue_number: sourcePr.number,
-        assignees: [mergedBy],
+        assignees: [owner],
       });
     } catch (e) {
-      core.warning(`Could not assign ${mergedBy}: ${(e as Error).message}`);
+      core.warning(`Could not assign ${owner}: ${(e as Error).message}`);
     }
   }
 
@@ -364,31 +383,41 @@ export async function postProcess({
   }
   const shas = response.commits.map((c) => c.sourceCommit.sha);
 
+  // Each target is handled on its own, so an API error on one does not
+  // skip the conflict comment or auto-merge of the others.
+  const errors: string[] = [];
   for (const result of response.results) {
-    if (result.status === 'success') {
-      await handleClean(
-        octokit,
-        repo,
-        sourcePr,
-        shas,
-        result.targetBranch,
-        result.pullRequestNumber,
-        settings,
-      );
-    } else if (
-      result.status === 'handled-error' &&
-      settings.conflictMode === 'comment' &&
-      result.error.errorContext.code === 'merge-conflict-exception'
-    ) {
-      await handleConflict(
-        octokit,
-        repo,
-        sourcePr,
-        shas,
-        result.targetBranch,
-        result.error.errorContext,
-        settings,
-      );
+    try {
+      if (result.status === 'success') {
+        await handleClean(
+          octokit,
+          repo,
+          sourcePr,
+          shas,
+          result.targetBranch,
+          result.pullRequestNumber,
+          settings,
+        );
+      } else if (
+        result.status === 'handled-error' &&
+        settings.conflictMode === 'comment' &&
+        result.error.errorContext.code === 'merge-conflict-exception'
+      ) {
+        await handleConflict(
+          octokit,
+          repo,
+          sourcePr,
+          shas,
+          result.targetBranch,
+          result.error.errorContext,
+          settings,
+        );
+      }
+    } catch (e) {
+      errors.push(`${result.targetBranch}: ${(e as Error).message}`);
     }
+  }
+  if (errors.length > 0) {
+    throw new Error(`Post-processing failed for ${errors.join('; ')}`);
   }
 }

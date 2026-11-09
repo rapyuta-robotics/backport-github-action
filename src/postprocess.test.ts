@@ -402,6 +402,64 @@ describe('postProcess: conflict', () => {
   });
 });
 
+describe('postProcess: who owns a conflict', () => {
+  it('falls back to the PR author when a bot merged it', async () => {
+    const { octokit, calls } = fakeOctokit();
+    await postProcess({
+      octokit: octokit as any,
+      repo,
+      sourcePr: {
+        ...sourcePr,
+        mergedBy: 'github-merge-queue[bot]',
+        author: 'author1',
+      },
+      response: conflictResponse() as any,
+      settings: settings(),
+    });
+    expect(
+      calls.find((c) => c[0] === 'issues.addAssignees')?.[1].assignees,
+    ).toEqual(['author1']);
+  });
+
+  it('assigns nobody when merger and author are both bots, but still labels', async () => {
+    const { octokit, calls } = fakeOctokit();
+    await postProcess({
+      octokit: octokit as any,
+      repo,
+      sourcePr: {
+        ...sourcePr,
+        mergedBy: 'some-app[bot]',
+        author: 'dependabot[bot]',
+      },
+      response: conflictResponse() as any,
+      settings: settings(),
+    });
+    expect(calls.some((c) => c[0] === 'issues.addAssignees')).toBe(false);
+    expect(calls.some((c) => c[0] === 'issues.addLabels')).toBe(true);
+  });
+});
+
+describe('postProcess: one failing target does not stop the others', () => {
+  it('handles every target, then throws once', async () => {
+    const { octokit, calls } = fakeOctokit();
+    octokit.rest.pulls.get = async () => {
+      throw new Error('boom');
+    };
+    const res = successResponse('release/2.14') as any;
+    res.results.push(conflictResponse('release/2.3').results[0]);
+    await expect(
+      postProcess({
+        octokit: octokit as any,
+        repo,
+        sourcePr: { ...sourcePr, mergedBy: 'merger' },
+        response: res,
+        settings: settings(),
+      }),
+    ).rejects.toThrow('release/2.14: boom');
+    expect(calls.some((c) => c[0] === 'issues.addLabels')).toBe(true);
+  });
+});
+
 describe('postProcess: non-success responses', () => {
   it('does nothing when the backport run failed as a whole', async () => {
     const { octokit, calls } = fakeOctokit();

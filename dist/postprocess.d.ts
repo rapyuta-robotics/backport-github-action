@@ -12,6 +12,7 @@ export type SourcePr = {
     number: number;
     title: string;
     mergedBy?: string;
+    author?: string;
 };
 export type OctokitLike = {
     rest: {

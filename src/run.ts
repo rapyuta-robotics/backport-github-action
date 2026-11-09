@@ -92,6 +92,7 @@ export async function run({
       number: pullRequest?.number as number,
       title: pullRequest?.title as string,
       mergedBy: pullRequest?.merged_by?.login as string | undefined,
+      author: pullRequest?.user?.login as string | undefined,
     },
     response: result,
     settings: {

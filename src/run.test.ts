@@ -133,7 +133,12 @@ describe('run', () => {
     expect(post).toHaveBeenCalledWith(
       expect.objectContaining({
         repo: { owner: 'rapyuta-robotics', repo: 'rr_oks' },
-        sourcePr: { number: 15000, title: 'fix: thing', mergedBy: 'merger' },
+        sourcePr: {
+          number: 15000,
+          title: 'fix: thing',
+          mergedBy: 'merger',
+          author: 'author',
+        },
         settings: expect.objectContaining({
           autoMerge: true,
           lineReviewers: { 'release/2.14': ['owner1'] },
