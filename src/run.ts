@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import { getOctokit } from '@actions/github';
 import { Context } from '@actions/github/lib/context';
 import {
   BackportResponse,
@@ -6,22 +7,44 @@ import {
   UnhandledErrorResult,
   getOptionsFromGithub,
 } from 'backport';
+import {
+  ConflictMode,
+  OctokitLike,
+  parseLineReviewers,
+  postProcess,
+} from './postprocess';
 
-type Inputs = {
+export type Inputs = {
   accessToken: string;
   autoBackportLabelPrefix: string;
   repoForkOwner: string;
   addOriginalReviewers: boolean;
+  autoMerge: boolean;
+  autoMergeMethod: string;
+  lineReviewers: string;
+  conflictMode: ConflictMode;
+  conflictLabelPrefix: string;
+  provenanceTrailer: boolean;
 };
 
 export async function run({
   context,
   inputs,
+  octokit,
 }: {
   context: Context;
   inputs: Inputs;
+  octokit?: OctokitLike;
 }) {
   core.info('Initiate backport');
+
+  // Checked at runtime: the value comes straight from the workflow input.
+  const conflictMode: string = inputs.conflictMode;
+  if (conflictMode !== 'comment' && conflictMode !== 'draft-pr') {
+    throw new Error(
+      `conflict_mode must be "comment" or "draft-pr", got "${conflictMode}"`,
+    );
+  }
 
   const options = getActionOptions(inputs, context);
   const optionsFromGithub = await getOptionsFromGithub({
@@ -43,9 +66,44 @@ export async function run({
     );
   }
 
-  const result = await backportRun({ options, exitCodeOnFailure: false });
+  // CLI args outrank the repo's .backportrc.json (module options do not), so
+  // the conflict mode is forced here: in comment mode a conflicting pick must
+  // fail instead of being committed with markers into a PR.
+  const processArgs: string[] =
+    inputs.conflictMode === 'comment' ? ['--commitConflicts', 'false'] : [];
+
+  const result = await backportRun({
+    options,
+    processArgs,
+    exitCodeOnFailure: false,
+  });
 
   core.info(`Result ${JSON.stringify(result, null, 2)}`);
+
+  const pullRequest = context.payload.pull_request;
+  await postProcess({
+    octokit:
+      octokit ??
+      (getOctokit(inputs.accessToken, {
+        baseUrl: context.apiUrl,
+      }) as unknown as OctokitLike),
+    repo: { owner: context.repo.owner, repo: context.repo.repo },
+    sourcePr: {
+      number: pullRequest?.number as number,
+      title: pullRequest?.title as string,
+      mergedBy: pullRequest?.merged_by?.login as string | undefined,
+    },
+    response: result,
+    settings: {
+      autoMerge: inputs.autoMerge,
+      autoMergeMethod: inputs.autoMergeMethod || 'squash',
+      lineReviewers: parseLineReviewers(inputs.lineReviewers),
+      conflictMode: inputs.conflictMode,
+      conflictLabelPrefix: inputs.conflictLabelPrefix,
+      provenanceTrailer: inputs.provenanceTrailer,
+    },
+  });
+
   return result;
 }
 
@@ -95,7 +153,9 @@ function getActionOptions(inputs: Inputs, context: Context) {
     githubApiBaseUrlV3: context.apiUrl,
     githubApiBaseUrlV4: context.graphqlUrl,
     interactive: false,
-    publishStatusCommentOnFailure: true,
+    // In comment mode the conflict comment replaces the library's generic
+    // "run npx backport" failure comment.
+    publishStatusCommentOnFailure: inputs.conflictMode !== 'comment',
     pullNumber: pullRequest.number,
     repoForkOwner:
       inputs.repoForkOwner !== '' ? inputs.repoForkOwner : repo.owner,

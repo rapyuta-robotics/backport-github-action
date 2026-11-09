@@ -199590,6 +199590,18 @@ process.env['NODE_ENV'] = 'production-github-action';
         addOriginalReviewers: core.getBooleanInput('add_original_reviewers', {
             required: false,
         }),
+        autoMerge: core.getBooleanInput('auto_merge', { required: false }),
+        autoMergeMethod: core.getInput('auto_merge_method', { required: false }),
+        lineReviewers: core.getInput('line_reviewers', { required: false }),
+        conflictMode: core.getInput('conflict_mode', {
+            required: false,
+        }),
+        conflictLabelPrefix: core.getInput('conflict_label_prefix', {
+            required: false,
+        }),
+        provenanceTrailer: core.getBooleanInput('provenance_trailer', {
+            required: false,
+        }),
     },
 })
     .then((res) => {
@@ -199610,6 +199622,254 @@ process.env['NODE_ENV'] = 'production-github-action';
     core.error(`Backport unable to be completed: ${error.message}`);
     core.setFailed(error.message);
 });
+
+
+/***/ }),
+
+/***/ 99886:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.postProcess = exports.conflictComment = exports.conflictMarker = exports.parseLineReviewers = exports.shellQuote = exports.withProvenance = exports.provenanceLines = void 0;
+const core = __importStar(__nccwpck_require__(42186));
+function provenanceLines(prNumber, shas) {
+    return [
+        `Backport-of: #${prNumber}`,
+        ...shas.map((sha) => `(cherry picked from commit ${sha})`),
+    ];
+}
+exports.provenanceLines = provenanceLines;
+// The repo squash-merges with the PR body as the commit message, so the
+// trailer has to be in the body, as its last paragraph, to reach the release
+// branch. Idempotent: a body that already has the trailer is left as is.
+function withProvenance(body, prNumber, shas) {
+    const current = body ?? '';
+    const trailer = new RegExp(`^Backport-of:\\s*#${prNumber}\\b`, 'mi');
+    if (trailer.test(current)) {
+        return current;
+    }
+    const block = provenanceLines(prNumber, shas).join('\n') + '\n';
+    const trimmed = current.replace(/\s+$/, '');
+    return trimmed ? `${trimmed}\n\n${block}` : block;
+}
+exports.withProvenance = withProvenance;
+function shellQuote(s) {
+    return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+exports.shellQuote = shellQuote;
+function parseLineReviewers(raw) {
+    if (!raw.trim()) {
+        return {};
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    }
+    catch (e) {
+        core.warning(`line_reviewers is not valid JSON, requesting no reviewers: ${e.message}`);
+        return {};
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        core.warning('line_reviewers must be a JSON object, requesting no reviewers');
+        return {};
+    }
+    const out = {};
+    for (const [branch, value] of Object.entries(parsed)) {
+        const logins = (Array.isArray(value) ? value : [value]).filter((v) => typeof v === 'string' && v.trim() !== '');
+        if (logins.length > 0) {
+            out[branch] = logins;
+        }
+    }
+    return out;
+}
+exports.parseLineReviewers = parseLineReviewers;
+function conflictMarker(targetBranch) {
+    return `<!-- backport-conflict:${targetBranch} -->`;
+}
+exports.conflictMarker = conflictMarker;
+function conflictComment({ targetBranch, sourcePr, shas, conflictingFiles, missingBackports, assignee, }) {
+    const branch = `backport/${targetBranch}/pr-${sourcePr.number}`;
+    const title = `[Backport to ${targetBranch}] ${sourcePr.title} (#${sourcePr.number})`;
+    const body = [
+        `Manual backport of #${sourcePr.number} to ${targetBranch}.`,
+        '',
+        ...provenanceLines(sourcePr.number, shas),
+    ].join('\n');
+    const lines = [
+        conflictMarker(targetBranch),
+        `### Backport to \`${targetBranch}\` needs a manual port`,
+        '',
+        `The squash commit of this PR does not apply cleanly to \`${targetBranch}\`, so no backport PR was opened.` +
+            (assignee
+                ? ` @${assignee}, you merged this PR, so this is assigned to you.`
+                : ''),
+        '',
+    ];
+    if (conflictingFiles.length > 0) {
+        lines.push('Conflicting files:', ...conflictingFiles.map((f) => `- \`${f}\``), '');
+    }
+    if (missingBackports.length > 0) {
+        lines.push(`These earlier PRs touch the same files and are not on \`${targetBranch}\`; backporting them first may remove the conflict:`, ...missingBackports.map((m) => m.replace(/^\s*-?\s*/, '- ')), '');
+    }
+    lines.push('Run these from a clone of this repo:', '', '```bash', `git fetch origin ${targetBranch}`, `git switch -c ${branch} origin/${targetBranch}`, ...shas.map((sha) => `git cherry-pick -x ${sha}`), '# fix the conflicts, then:', 'git add -A && git cherry-pick --continue', `git push -u origin ${branch}`, `gh pr create --base ${targetBranch} --head ${branch} \\`, `  --title ${shellQuote(title)} \\`, `  --body ${shellQuote(body)}`, '```', '', 'Keep the `Backport-of:` and `(cherry picked from commit ...)` lines at the end of the PR description: the release audit uses them to match the port to this PR, also when the port differs from the original.', '', `If \`${targetBranch}\` does not need this fix, add the label \`no-backport-${targetBranch}\` with a comment saying why.`);
+    return lines.join('\n');
+}
+exports.conflictComment = conflictComment;
+async function upsertConflictComment(octokit, repo, issueNumber, targetBranch, body) {
+    const marker = conflictMarker(targetBranch);
+    const { data: comments } = await octokit.rest.issues.listComments({
+        ...repo,
+        issue_number: issueNumber,
+        per_page: 100,
+    });
+    const existing = comments.find((c) => (c.body ?? '').startsWith(marker));
+    if (existing) {
+        await octokit.rest.issues.updateComment({
+            ...repo,
+            comment_id: existing.id,
+            body,
+        });
+    }
+    else {
+        await octokit.rest.issues.createComment({
+            ...repo,
+            issue_number: issueNumber,
+            body,
+        });
+    }
+}
+const ENABLE_AUTO_MERGE = `
+mutation EnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+  enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }) {
+    pullRequest { number }
+  }
+}`;
+async function handleClean(octokit, repo, sourcePr, shas, targetBranch, pullNumber, settings) {
+    const { data: pr } = await octokit.rest.pulls.get({
+        ...repo,
+        pull_number: pullNumber,
+    });
+    if (settings.provenanceTrailer) {
+        const body = withProvenance(pr.body, sourcePr.number, shas);
+        if (body !== pr.body) {
+            await octokit.rest.pulls.update({
+                ...repo,
+                pull_number: pullNumber,
+                body,
+            });
+        }
+    }
+    const reviewers = settings.lineReviewers[targetBranch] ?? [];
+    if (reviewers.length > 0) {
+        try {
+            await octokit.rest.pulls.requestReviewers({
+                ...repo,
+                pull_number: pullNumber,
+                reviewers,
+            });
+        }
+        catch (e) {
+            core.warning(`Could not request review from ${reviewers.join(', ')} on #${pullNumber}: ${e.message}`);
+        }
+    }
+    else {
+        core.info(`No line owner configured for ${targetBranch}; no review requested`);
+    }
+    // In draft-pr mode a "successful" PR may contain committed conflict markers,
+    // so it must never be merged automatically.
+    if (settings.autoMerge && settings.conflictMode === 'comment') {
+        try {
+            await octokit.graphql(ENABLE_AUTO_MERGE, {
+                pullRequestId: pr.node_id,
+                mergeMethod: settings.autoMergeMethod.toUpperCase(),
+            });
+            core.info(`Enabled ${settings.autoMergeMethod} auto-merge on #${pullNumber}`);
+        }
+        catch (e) {
+            // Never fall back to merging directly: that would skip review on a
+            // branch without required checks.
+            core.warning(`Could not enable auto-merge on #${pullNumber}: ${e.message}`);
+        }
+    }
+}
+async function handleConflict(octokit, repo, sourcePr, shas, targetBranch, errorContext, settings) {
+    let mergedBy = sourcePr.mergedBy;
+    if (!mergedBy) {
+        const { data } = await octokit.rest.pulls.get({
+            ...repo,
+            pull_number: sourcePr.number,
+        });
+        mergedBy = data.merged_by?.login;
+    }
+    const body = conflictComment({
+        targetBranch,
+        sourcePr,
+        shas,
+        conflictingFiles: errorContext.conflictingFiles ?? [],
+        missingBackports: (errorContext.commitsWithoutBackports ?? []).map((c) => c.formatted),
+        assignee: mergedBy,
+    });
+    await upsertConflictComment(octokit, repo, sourcePr.number, targetBranch, body);
+    if (mergedBy) {
+        try {
+            await octokit.rest.issues.addAssignees({
+                ...repo,
+                issue_number: sourcePr.number,
+                assignees: [mergedBy],
+            });
+        }
+        catch (e) {
+            core.warning(`Could not assign ${mergedBy}: ${e.message}`);
+        }
+    }
+    await octokit.rest.issues.addLabels({
+        ...repo,
+        issue_number: sourcePr.number,
+        labels: [`${settings.conflictLabelPrefix}${targetBranch}`],
+    });
+}
+async function postProcess({ octokit, repo, sourcePr, response, settings, }) {
+    if (response.status !== 'success') {
+        return;
+    }
+    const shas = response.commits.map((c) => c.sourceCommit.sha);
+    for (const result of response.results) {
+        if (result.status === 'success') {
+            await handleClean(octokit, repo, sourcePr, shas, result.targetBranch, result.pullRequestNumber, settings);
+        }
+        else if (result.status === 'handled-error' &&
+            settings.conflictMode === 'comment' &&
+            result.error.errorContext.code === 'merge-conflict-exception') {
+            await handleConflict(octokit, repo, sourcePr, shas, result.targetBranch, result.error.errorContext, settings);
+        }
+    }
+}
+exports.postProcess = postProcess;
 
 
 /***/ }),
@@ -199645,9 +199905,16 @@ var __importStar = (this && this.__importStar) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getFailureMessage = exports.run = void 0;
 const core = __importStar(__nccwpck_require__(42186));
+const github_1 = __nccwpck_require__(95438);
 const backport_1 = __nccwpck_require__(47001);
-async function run({ context, inputs, }) {
+const postprocess_1 = __nccwpck_require__(99886);
+async function run({ context, inputs, octokit, }) {
     core.info('Initiate backport');
+    // Checked at runtime: the value comes straight from the workflow input.
+    const conflictMode = inputs.conflictMode;
+    if (conflictMode !== 'comment' && conflictMode !== 'draft-pr') {
+        throw new Error(`conflict_mode must be "comment" or "draft-pr", got "${conflictMode}"`);
+    }
     const options = getActionOptions(inputs, context);
     const optionsFromGithub = await (0, backport_1.getOptionsFromGithub)({
         accessToken: options.accessToken,
@@ -199661,8 +199928,38 @@ async function run({ context, inputs, }) {
         !options.branchLabelMapping) {
         throw new Error('No target branches configured. Please configure `targetBranches: ["my-target-branch"]` in .backportrc.json or use the `auto_backport_label_prefix` input option.');
     }
-    const result = await (0, backport_1.backportRun)({ options, exitCodeOnFailure: false });
+    // CLI args outrank the repo's .backportrc.json (module options do not), so
+    // the conflict mode is forced here: in comment mode a conflicting pick must
+    // fail instead of being committed with markers into a PR.
+    const processArgs = inputs.conflictMode === 'comment' ? ['--commitConflicts', 'false'] : [];
+    const result = await (0, backport_1.backportRun)({
+        options,
+        processArgs,
+        exitCodeOnFailure: false,
+    });
     core.info(`Result ${JSON.stringify(result, null, 2)}`);
+    const pullRequest = context.payload.pull_request;
+    await (0, postprocess_1.postProcess)({
+        octokit: octokit ??
+            (0, github_1.getOctokit)(inputs.accessToken, {
+                baseUrl: context.apiUrl,
+            }),
+        repo: { owner: context.repo.owner, repo: context.repo.repo },
+        sourcePr: {
+            number: pullRequest?.number,
+            title: pullRequest?.title,
+            mergedBy: pullRequest?.merged_by?.login,
+        },
+        response: result,
+        settings: {
+            autoMerge: inputs.autoMerge,
+            autoMergeMethod: inputs.autoMergeMethod || 'squash',
+            lineReviewers: (0, postprocess_1.parseLineReviewers)(inputs.lineReviewers),
+            conflictMode: inputs.conflictMode,
+            conflictLabelPrefix: inputs.conflictLabelPrefix,
+            provenanceTrailer: inputs.provenanceTrailer,
+        },
+    });
     return result;
 }
 exports.run = run;
@@ -199702,7 +199999,9 @@ function getActionOptions(inputs, context) {
         githubApiBaseUrlV3: context.apiUrl,
         githubApiBaseUrlV4: context.graphqlUrl,
         interactive: false,
-        publishStatusCommentOnFailure: true,
+        // In comment mode the conflict comment replaces the library's generic
+        // "run npx backport" failure comment.
+        publishStatusCommentOnFailure: inputs.conflictMode !== 'comment',
         pullNumber: pullRequest.number,
         repoForkOwner: inputs.repoForkOwner !== '' ? inputs.repoForkOwner : repo.owner,
         repoName: repo.repo,

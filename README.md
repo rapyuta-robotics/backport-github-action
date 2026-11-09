@@ -61,3 +61,18 @@ For more fine grained customization, and for the ability to run the [Backport To
 
  See the [Backport Tool documentation](https://github.com/sorenlouv/backport/blob/main/docs/config-file-options.md) for all configuration options.
 
+
+## Rapyuta additions
+
+On top of the upstream action, this fork does the following after the backport library has run. Each step has an input.
+
+| Input | Default | What it does |
+|---|---|---|
+| `auto_merge` | `true` | Enables GitHub auto-merge on each backport PR that applied cleanly. Branch protection still decides when it merges (approvals, required checks). If enabling fails, the action only warns; it never merges directly. Needs the repo setting "Allow auto-merge". |
+| `auto_merge_method` | `squash` | Merge method used for auto-merge. |
+| `line_reviewers` | `''` | JSON object: target branch → login or list of logins. Review is requested from them on that branch's backport PRs. `null` or a missing branch means no request. |
+| `conflict_mode` | `comment` | `comment`: a pick that conflicts opens no PR. The action comments on the original PR with the exact `git cherry-pick -x` / `git push` / `gh pr create` commands, assigns whoever merged the original, and adds the label `<conflict_label_prefix><target branch>`. The comment is updated, not repeated, on re-runs. `commitConflicts` from `.backportrc.json` is overridden. `draft-pr`: upstream behaviour (whatever `.backportrc.json` says); auto-merge is never enabled in this mode because a PR may hold conflict markers. |
+| `conflict_label_prefix` | `backport-conflict-` | Prefix of the conflict label. |
+| `provenance_trailer` | `true` | Appends `Backport-of: #N` and `(cherry picked from commit <sha>)` as the last paragraph of each backport PR body. With "squash merge, PR body as commit message", both reach the release branch. |
+
+The token needs `contents`, `pull-requests` and `issues` write. Adding a label with a PAT triggers `labeled` workflows, so a caller that runs on `labeled` should ignore labels other than its backport prefix.

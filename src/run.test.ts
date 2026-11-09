@@ -1,7 +1,18 @@
 import * as core from '@actions/core';
 import { Context } from '@actions/github/lib/context';
 import * as backport from 'backport';
+import * as postprocess from './postprocess';
 import { getFailureMessage, run } from './run';
+
+// Keeps the upstream behaviour so the upstream expectations below still hold.
+const legacyInputs = {
+  autoMerge: false,
+  autoMergeMethod: 'squash',
+  lineReviewers: '',
+  conflictMode: 'draft-pr' as const,
+  conflictLabelPrefix: 'backport-conflict-',
+  provenanceTrailer: false,
+};
 
 describe('run', () => {
   afterEach(() => {
@@ -30,6 +41,7 @@ describe('run', () => {
         autoBackportLabelPrefix: 'backport-to-',
         repoForkOwner: '',
         addOriginalReviewers: true,
+        ...legacyInputs,
       },
       context: {
         repo: { owner: 'elastic', repo: 'kibana' },
@@ -48,6 +60,7 @@ describe('run', () => {
 
     expect(spy).toHaveBeenCalledWith({
       exitCodeOnFailure: false,
+      processArgs: [],
       options: {
         accessToken: 'very-secret',
         assignees: ['sorenlouv'],
@@ -69,6 +82,80 @@ describe('run', () => {
     });
   });
 
+  const rrContext = {
+    repo: { owner: 'rapyuta-robotics', repo: 'rr_oks' },
+    payload: {
+      pull_request: {
+        number: 15000,
+        title: 'fix: thing',
+        user: { login: 'author' },
+        merged_by: { login: 'merger' },
+        requested_reviewers: [],
+      },
+    },
+    serverUrl: 'https://github.com',
+    apiUrl: 'https://api.github.com',
+    graphqlUrl: 'https://api.github.com/graphql',
+  } as unknown as Context;
+
+  const rrInputs = {
+    accessToken: 'very-secret',
+    autoBackportLabelPrefix: 'backport-to-',
+    repoForkOwner: '',
+    addOriginalReviewers: false,
+    autoMerge: true,
+    autoMergeMethod: 'squash',
+    lineReviewers: '{"release/2.14": "owner1"}',
+    conflictMode: 'comment' as const,
+    conflictLabelPrefix: 'backport-conflict-',
+    provenanceTrailer: true,
+  };
+
+  it('in comment mode, forces commitConflicts off over the repo config and silences the library failure comment', async () => {
+    const spy = jest
+      .spyOn(backport, 'backportRun')
+      .mockResolvedValue({ status: 'success', commits: [], results: [] });
+    // @ts-expect-error
+    jest.spyOn(backport, 'getOptionsFromGithub').mockResolvedValue({});
+    jest.spyOn(core, 'info').mockReturnValue();
+    const post = jest.spyOn(postprocess, 'postProcess').mockResolvedValue();
+
+    await run({ inputs: rrInputs, context: rrContext, octokit: {} as any });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        processArgs: ['--commitConflicts', 'false'],
+        options: expect.objectContaining({
+          publishStatusCommentOnFailure: false,
+        }),
+      }),
+    );
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repo: { owner: 'rapyuta-robotics', repo: 'rr_oks' },
+        sourcePr: { number: 15000, title: 'fix: thing', mergedBy: 'merger' },
+        settings: expect.objectContaining({
+          autoMerge: true,
+          lineReviewers: { 'release/2.14': ['owner1'] },
+          conflictMode: 'comment',
+        }),
+      }),
+    );
+  });
+
+  it('rejects an unknown conflict mode', async () => {
+    // @ts-expect-error
+    jest.spyOn(backport, 'getOptionsFromGithub').mockResolvedValue({});
+    jest.spyOn(core, 'info').mockReturnValue();
+    await expect(
+      run({
+        inputs: { ...rrInputs, conflictMode: 'bogus' as any },
+        context: rrContext,
+        octokit: {} as any,
+      }),
+    ).rejects.toThrow('conflict_mode');
+  });
+
   it('aborts if no targetBranches, branchLabelMappings or autoBackportLabelPrefix are provided', async () => {
     const spy = jest.spyOn(backport, 'backportRun');
 
@@ -84,6 +171,7 @@ describe('run', () => {
         autoBackportLabelPrefix: '',
         repoForkOwner: '',
         addOriginalReviewers: true,
+        ...legacyInputs,
       },
       context: {
         repo: { owner: 'elastic', repo: 'kibana' },
