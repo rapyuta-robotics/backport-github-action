@@ -18,8 +18,8 @@ export type PostProcessSettings = {
   autoMergeMethod: string;
   // GitHub login that owns the fix; '' to derive it from author / merger
   fixOwner: string;
-  // GitHub login that takes over after the SLA; named in the conflict
-  // comment but not pinged
+  // Who takes over a conflict after the SLA: a login, or a JSON object
+  // target branch -> login. Named in the conflict comment but not pinged.
   escalation: string;
   conflictMode: ConflictMode;
   conflictLabelPrefix: string;
@@ -98,6 +98,29 @@ export function withProvenance(
 
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+export function escalationFor(
+  raw: string,
+  targetBranch: string,
+): string | undefined {
+  const value = raw.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (!value.startsWith('{')) {
+    return value;
+  }
+  try {
+    const map = JSON.parse(value) as Record<string, unknown>;
+    const login = map[targetBranch];
+    return typeof login === 'string' && login.trim() ? login.trim() : undefined;
+  } catch (e) {
+    core.warning(
+      `escalation is not valid JSON, ignoring it: ${(e as Error).message}`,
+    );
+    return undefined;
+  }
 }
 
 export function conflictMarker(targetBranch: string): string {
@@ -339,7 +362,7 @@ async function handleConflict(
       (c) => c.formatted,
     ),
     assignee: owner,
-    escalation: settings.escalation.trim() || undefined,
+    escalation: escalationFor(settings.escalation, targetBranch),
   });
   await upsertConflictComment(
     octokit,

@@ -47,6 +47,7 @@ type Repo = {
 export declare function provenanceLines(prNumber: number, shas: string[]): string[];
 export declare function withProvenance(body: string | null | undefined, prNumber: number, shas: string[]): string;
 export declare function shellQuote(s: string): string;
+export declare function escalationFor(raw: string, targetBranch: string): string | undefined;
 export declare function conflictMarker(targetBranch: string): string;
 export declare function conflictComment({ targetBranch, sourcePr, shas, conflictingFiles, missingBackports, assignee, escalation, }: {
     targetBranch: string;

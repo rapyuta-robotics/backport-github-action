@@ -27,7 +27,7 @@ inputs:
     required: false
     default: ''
   escalation:
-    description: GitHub login that takes over a conflict after the backport SLA. Only named in the conflict comment (not pinged, not assigned)
+    description: GitHub login that takes over a conflict after the backport SLA, or a JSON object mapping target branch to login (null = none). Only named in the conflict comment (not pinged, not assigned)
     required: false
     default: ''
   conflict_mode:

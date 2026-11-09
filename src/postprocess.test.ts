@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import {
   conflictComment,
   conflictMarker,
+  escalationFor,
   postProcess,
   resolveOwner,
   PostProcessSettings,
@@ -160,6 +161,25 @@ describe('resolveOwner', () => {
 
   it('never returns a bot', () => {
     expect(resolveOwner('x[bot]', 'y[bot]', 'z[bot]')).toBeUndefined();
+  });
+});
+
+describe('escalationFor', () => {
+  it('uses a plain login for every line', () => {
+    expect(escalationFor('rte1', 'release/2.3')).toBe('rte1');
+  });
+
+  it('picks the line from a JSON map; null or missing means none', () => {
+    const raw = '{"release/2.3": "rte1", "release/2.6": null}';
+    expect(escalationFor(raw, 'release/2.3')).toBe('rte1');
+    expect(escalationFor(raw, 'release/2.6')).toBeUndefined();
+    expect(escalationFor(raw, 'release/2.14')).toBeUndefined();
+  });
+
+  it('treats empty or invalid input as none', () => {
+    expect(escalationFor('', 'release/2.3')).toBeUndefined();
+    expect(escalationFor('{nope', 'release/2.3')).toBeUndefined();
+    expect(core.warning).toHaveBeenCalled();
   });
 });
 

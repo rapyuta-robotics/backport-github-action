@@ -199656,7 +199656,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.postProcess = exports.conflictComment = exports.conflictMarker = exports.shellQuote = exports.withProvenance = exports.provenanceLines = exports.resolveOwner = void 0;
+exports.postProcess = exports.conflictComment = exports.conflictMarker = exports.escalationFor = exports.shellQuote = exports.withProvenance = exports.provenanceLines = exports.resolveOwner = void 0;
 const core = __importStar(__nccwpck_require__(42186));
 const isBot = (login) => !!login && login.endsWith('[bot]');
 // The fix owner, else the original author, else whoever merged it; never a
@@ -199691,6 +199691,25 @@ function shellQuote(s) {
     return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 exports.shellQuote = shellQuote;
+function escalationFor(raw, targetBranch) {
+    const value = raw.trim();
+    if (!value) {
+        return undefined;
+    }
+    if (!value.startsWith('{')) {
+        return value;
+    }
+    try {
+        const map = JSON.parse(value);
+        const login = map[targetBranch];
+        return typeof login === 'string' && login.trim() ? login.trim() : undefined;
+    }
+    catch (e) {
+        core.warning(`escalation is not valid JSON, ignoring it: ${e.message}`);
+        return undefined;
+    }
+}
+exports.escalationFor = escalationFor;
 function conflictMarker(targetBranch) {
     return `<!-- backport-conflict:${targetBranch} -->`;
 }
@@ -199833,7 +199852,7 @@ async function handleConflict(octokit, repo, sourcePr, shas, targetBranch, error
         conflictingFiles: errorContext.conflictingFiles ?? [],
         missingBackports: (errorContext.commitsWithoutBackports ?? []).map((c) => c.formatted),
         assignee: owner,
-        escalation: settings.escalation.trim() || undefined,
+        escalation: escalationFor(settings.escalation, targetBranch),
     });
     await upsertConflictComment(octokit, repo, sourcePr.number, targetBranch, body);
     if (owner) {
